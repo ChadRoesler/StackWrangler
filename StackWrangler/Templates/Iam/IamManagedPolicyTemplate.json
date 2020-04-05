@@ -1,0 +1,13 @@
+{
+    "Resources": {
+        "#{IamManagedPolicy}": {
+            "Type": "AWS::IAM::ManagedPolicy",
+            "Properties": {
+                "PolicyDocument": #{PolicyDocument}
+            },
+            "DependsOn": [
+                #{ResourceList}
+            ]
+        }
+    }
+}

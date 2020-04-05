@@ -1,0 +1,14 @@
+{
+    "Key": "CloudformationStackName",
+    "Value" : {
+        "Ref": "AWS::StackName"
+    },
+    "Key": "CloudformationStackId",
+    "Value" : {
+        "Ref": "AWS::StackId"
+    },
+    "Key": "CloudformationLogicalName",
+    "Value" : {
+        "Ref": "{#ObjectLogicalName}"
+    }
+}

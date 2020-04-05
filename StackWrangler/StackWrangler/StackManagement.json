@@ -1,0 +1,283 @@
+{
+    "StackDirectory" : "C:\\ChadRoesler_Workspace\\Stacks",
+    "StackArchitecture" : [
+        {
+            "Type" : "AWSTemplateFormatVersion",
+            "Order" : 0
+        },
+        {
+            "Type" : "Description",
+            "Order" : 1
+        },
+        {
+            "Type" : "Parameters",
+            "Order" : 2
+        },
+        {
+            "Type" : "Mappings",
+            "Order" : 2
+        },
+        {
+            "Type" : "Conditions",
+            "Order" : 4
+        },
+        {
+            "Type" : "Resources",
+            "Order" : 5
+        },
+        {
+            "Type" : "Outputs",
+            "Order" : 6
+        }
+    ],
+    "Remove" : [
+        "Metadata"
+    ],
+    "ResourceLayers" : [
+        {   
+            "Layer" : 0,
+            "LayerName": "NetworkingLayer",
+            "Resources" : [
+                {
+                    "Type" : "AWS::EC2::VPC",
+                    "Order" : 1
+                },
+                {
+                    "Type" : "AWS::EC2::SubnetId",
+                    "Order" : 2
+                },
+                {
+                    "Type" : "AWS::EC2::VPCEndpoint",
+                    "Order" : 3
+                },
+                {
+                    "Type" : "AWS::EC2::DHCPOptions",
+                    "Order" : 4
+                },
+                {
+                    "Type" : "AWS::EC2::VPCDHCPOptionsAssociation",
+                    "Order" : 5
+                },
+                {
+                    "Type" : "AWS::EC2::InternetGateway",
+                    "Order" : 6
+                },
+                {
+                    "Type" : "AWS::EC2::VPCGatewayAttachment",
+                    "Order" : 7
+                },
+                {
+                    "Type" : "AWS::EC2::Subnet",
+                    "Order" : 8
+                },
+                {
+                    "Type" : "AWS::EC2::RouteTable",
+                    "Order" : 9
+                },
+                {
+                    "Type" : "AWS::EC2::Route",
+                    "Order" : 10
+                },
+                {
+                    "Type" : "AWS::EC2::SubnetRouteTableAssociation",
+                    "Order" : 11
+                },
+                {
+                    "Type" : "AWS::EC2::EIP",
+                    "Order" : 12
+                },
+                {
+                    "Type" : "AWS::EC2::NatGateway",
+                    "Order" : 13
+                }
+            ]
+        },
+        {
+            "Layer" : 1,
+            "LayerName" : "AccessManagementLayer",
+            "Resources" : [
+                {
+                    "Type" : "AWS::IAM::User",
+                    "Order" : 1
+                },
+                {
+                    "Type" : "AWS::IAM::AccessKey",
+                    "Order" : 2
+                },
+                {
+                    "Type" : "AWS::SecretsManager::Secret",
+                    "Order" : 3
+                },
+                {
+                    "Type" : "AWS::IAM::Role",
+                    "Order" : 4
+                },
+                {
+                    "Type" : "AWS::IAM::Group",
+                    "Order" : 5
+                },
+                {
+                    "Type" : "AWS::IAM::InstanceProfile",
+                    "Order" : 6
+                }
+            ]
+        },
+        {
+            "Layer" : 2,
+            "LayerName" : "MachineLayer",
+            "Resources" : [
+                {
+                    "Type" : "AWS::EC2::SecurityGroup",
+                    "Order" : 1
+                },
+                {
+                    "Type" : "AWS::EC2::Instance",
+                    "Order" : 2
+                },
+                {
+                    "Type" : "AWS::S3::Bucket",
+                    "Order" : 3
+                },
+                {
+                    "Type" : "AWS::Lambda::Function",
+                    "Order" : 4
+                },
+                {
+                    "Type" : "AWS::Logs::LogGroup",
+                    "Order" : 5
+                },
+                {
+                    "Type" : "AWS::EC2::FlowLog",
+                    "Order" : 6
+                }
+            ]
+        },
+        {
+            "Layer" : 3,
+            "LayerName" : "PermissionLayer",
+            "Resources" : [
+                {
+                    "Type" : "AWS::IAM::ManagedPolicy",
+                    "Order" : 1
+                }
+            ]
+
+        }
+    ],
+    "TransientResources":  [
+        "AWS::CloudFormation::WaitCondition",
+        "AWS::CloudFormation::WaitConditionHandle"
+    ],
+    "ReferencedObjectsMap" : [
+        {
+            "ObjectType" : "Resources",
+            "ReferenceTypes" : [
+                {
+                    "Name" : "Fn::GetAtt",
+                    "Type" : "System.Object[]",
+                    "ReferenceAt" : "0"
+                },
+                {
+                    "Name" : "Ref",
+                    "Type" : "System.String"
+                }
+            ],
+            "FoundIn" : [
+                "Resources",
+                "Outputs",
+                "TransientResources"
+            ],
+            "Contains" : [
+                "Parameters",
+                "Mappings",
+                "Conditions",
+                "Resources"
+            ]
+        },
+        {
+            "ObjectType" : "Parameters",
+            "ReferenceTypes" : [
+                {
+                    "Name" : "Ref",
+                    "Type" : "System.String"
+                },
+                {
+                    "Name" : "Fn::Sub",
+                    "Type" : "System.String",
+                    "SearchString" : "\\$\\{ResourceName\\}"
+                }
+            ],
+            "FoundIn" : [
+                "Outputs",
+                "Conditions",
+                "Resources"
+            ]
+        },
+        {
+            "ObjectType" : "Mappings",
+            "ReferenceTypes" : [
+                {
+                    "Name" : "Fn::FindInMap",
+                    "Type" : "System.Object[]",
+                    "ReferenceAt" : "0"
+                }
+            ],
+            "FoundIn" : [
+                "Outputs",
+                "Resources",
+                "Conditions"
+            ]
+        },
+        {
+            "ObjectType" : "Conditions",
+            "ReferenceTypes" : [
+                {
+                    "Name" : "Condition",
+                    "Type" : "System.String"
+                },
+                {
+                    "Name" : "Fn::If",
+                    "Type" : "System.Object[]",
+                    "ReferenceAt" : "0"
+                }
+            ],
+            "FoundIn" : [
+                "Conditions",
+                "Outputs",
+                "Resources",
+                "TransientResources"
+            ],
+            "Contains" : [
+                "Parameters",
+                "Mappings",
+                "Conditions"
+            ]
+        },
+        {
+            "ObjectType" : "Outputs",
+            "Contains" : [
+                "Parameters",
+                "Mappings",
+                "Conditions",
+                "Resources"
+            ]
+        },
+        {
+            "ObjectType" : "TransientResources",
+            "ReferenceTypes" : [
+                {
+                    "Name" : "Ref",
+                    "Type" : "System.String"
+                }
+            ],
+            "Contains" : [
+                "Conditions",
+                "Resources",
+                "TransientResources"
+            ],
+            "FoundIn" : [
+                "TransientResources"
+            ]
+        }
+    ]
+}

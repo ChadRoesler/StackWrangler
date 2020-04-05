@@ -1,0 +1,606 @@
+function Wrangle-ResourceStack
+{
+    param(
+        [System.Object[]] $resourceStacks,
+        [string] $stackSystemName,
+        [string] $stackOutputPath,
+        [string] $stackManagementLocation = "$($PSScriptRoot)\..\Templates\StackManagement.json"
+    )
+    $stackMangementFile = Get-Item $stackManagementLocation
+    $stackMangementText = [System.IO.File]::ReadAllText($stackMangementFile)
+    $stackMangementObject = ConvertFrom-Json $stackMangementText
+
+    $rootObjectPathName = "`$root_Object"
+
+    $resourceLayerArray = @()
+    $dependantResourceArray = @()
+    $missingResourceArray = @()
+    $referencedResourceArray = @()
+    
+
+    $orderedResourceLayerList = $stackMangementObject.ResourceLayers | Sort-Object { $_.Layer }
+    $referencedObjectsMap = $stackMangementObject.ReferenceObjectMap
+
+#########################################
+# Resource Layer Organization
+# this pass orders the resources
+#########################################
+    Write-Log -message "Ordering Resources"
+    foreach($orderedResourceLayer in $orderedResourceLayerList)
+    {
+        $orderedResourceList = $orderedResourceLayer.Resources | Sort-Object { $_.Order }  | Select-Object -Property Type
+        $resourceLayer = New-Object System.Object
+        $resourceLayer | Add-Member -MemberType NoteProperty -Name "Layer" -Value $orderedResourceLayer.Layer
+        $resourceLayer | Add-Member -MemberType NoteProperty -Name "Resources" -Value (New-Object System.Object)
+        $resourceLayer | Add-Member -MemberType NoteProperty -Name "LayerName" -Value $orderedResourceLayer.LayerName
+        
+        foreach($orderedResource in $orderedResourceList)
+        {
+            foreach($resourceStack in $resourceStacks)
+            {
+                foreach($resource in $resourceStack.Resources.PsObject.Properties)
+                {
+                    if($resourceStack.Resources."$($resource.Name)".Type -eq $orderedResource.Type)
+                    {
+                        if(($resourceStack.Resources."$($resource.Name)".PsObject.Properties | Where-Object { $_.Name -eq "DependsOn" }).Count -gt 0)
+                        {
+                            $newRefObject = New-Object System.Object
+                            $newRefObject | Add-Member -MemberType NoteProperty -Name "Resource" -Value $resource.Name
+                            $newRefObject | Add-Member -MemberType NoteProperty -Name "DependsOn" -Value $resourceStack.Resources."$($resource.Name)".DependsOn
+                            $newRefObject | Add-Member -MemberType NoteProperty -Name "ResourceLayer" -Value $orderedResourceLayer.Layer
+                            $dependantResourceArray += $newRefObject
+                            $resourceStack.Resources."$($resource.Name)".PsObject.Properties.Remove("DependsOn")
+                        }
+                        $resourceLayer.Resources | Add-Member -MemberType NoteProperty -Name $resource.Name -Value (Clone-Object -objectToClone $resourceStack.Resources."$($resource.Name)")
+                        $resourceStack.Resources.PsObject.Properties.Remove("$($resource.Name)")
+                        if(($resourceStack.PsObject.Properties | Where-Object { $_.Name -eq "Outputs"}).Count -gt 0)
+                        {
+                            $resourceLayer | Add-Member -MemberType NoteProperty -Name "Outputs" -Value (New-Object System.Object)
+                            foreach($output in $resourceStack.Outputs.PsObject.Properties)
+                            {
+                                $resourceLayer.Outputs | Add-Member -MemberType NoteProperty -Name $output.Name -Value (Clone-Object -objectToClone $resourceStack.Outputs."$($output.Name)")
+                                $resourceStack.Outputs.PsObject.Properties.Remove("$($output.Name)")
+                            }
+                            $resourceStack.PsObject.Properties.Remove("Outputs")
+                        }
+                    }
+                }
+            }
+        }
+        $resourceLayerArray += $resourceLayer
+    }
+
+#########################################
+# Missing Resource Catch
+# Checks for built resource Types that are not listed in the Stack Management Config
+#########################################
+    Write-Log -message "Check for missing Resources from Stack Configuration Template"
+    $missingResourceStacks = $resourceStacks | Where-Object { $_.Resources.PsObject.Properties.Count -gt 0 }
+    if($null -ne $missingResourceStacks)
+    {
+        if($null -eq $missingResourceStacks.Count)
+        {
+            $missingResourceStacks = @($missingResourceStacks)
+        }
+        foreach($missingResourceStack in $missingResourceStacks)
+        {
+            foreach($resource in $missingResourceStack.Resources.PsObject.Properties)
+            {
+                if(($missingResourceArray | Where-Object { $_.Type -eq $($missingResourceStack.Resources."$($resource.Name)".Type) }).Count -eq 0)
+                {
+                    $missingObject = New-Object System.Object
+                    $missingObject | Add-Member -MemberType NoteProperty -Name "Type" -Value $missingResourceStack.Resources."$($resource.Name)".Type
+                    $missingObject | Add-Member -MemberType NoteProperty -Name "Values" -Value @($($resource.Name))
+                    $missingResourceArray += $missingObject
+                }
+                else
+                {
+                    $missingObject = $missingResourceArray | Where-Object { $_.Type -eq $($missingResourceStack.Resources."$($resource.Name)".Type) }
+                    $missingObject.Values += $($resource.Name)
+                }
+            }
+        }
+
+#########################################
+# Warn about missing items in the stack config
+#########################################
+        if($missingResourceArray.Count -gt 0)
+        {
+            foreach($missingResource in $missingResourceArray)
+            {
+                $missingResourceWarming = @"
+The Resource Type: $($missingResource.Type) was not found in the stack configuration.
+The following Resources of that type have been found: $($missingResource.Values -join ', ').
+"@
+                Write-WarningLog -message $missingResourceWarming
+            }
+            Write-WarningLog -message "The resources listed above will be placed in their own as a last layer"
+        }
+
+#########################################
+# Build Last layer of missing items
+#########################################
+        $resourceLayer = New-Object System.Object
+        $resourceLayer | Add-Member -MemberType NoteProperty -Name "Layer" -Value (($resourceLayerArray | Sort-Object -Property Layer -Descending | Select-Object -first 1).Layer + 1)
+        $resourceLayer | Add-Member -MemberType NoteProperty -Name "Resources" -Value (New-Object System.Object)
+        $resourceLayer | Add-Member -MemberType NoteProperty -Name "LayerName" -Value "MissingObjects"
+
+        foreach($missingResourceStack in $missingResourceStacks)
+        {
+            foreach($missingResource in $missingResourceStack.Resources.PsObject.Properties)
+            {
+                if(($missingResourceStack.Resources."$($missingResource.Name)".PsObject.Properties | Where-Object { $_.Name -eq "DependsOn" }).Count -gt 0)
+                {
+                    $newRefObject = New-Object System.Object
+                    $newRefObject | Add-Member -MemberType NoteProperty -Name "Resource" -Value $missingResource.Name
+                    $newRefObject | Add-Member -MemberType NoteProperty -Name "DependsOn" -Value $missingResourceStack.Resources."$($missingResource.Name)".DependsOn
+                    $newRefObject | Add-Member -MemberType NoteProperty -Name "ResourceLayer" -Value $resourceLayer.Layer
+                    $dependantResourceArray += $newRefObject
+                    $missingResourceStack.Resources."$($missingResource.Name)".PsObject.Properties.Remove("DependsOn")
+                }
+                $resourceLayer.Resources | Add-Member -MemberType NoteProperty -Name $missingResource.Name -Value (Clone-Object -objectToClone $missingResourceStack.Resources."$($missingResource.Name)")
+                $missingResourceStack.Resources.PsObject.Properties.Remove("$($missingResource.Name)")
+            }
+            if(($missingResourceStack.PsObject.Properties | Where-Object { $_.Name -eq "Outputs" }).Count -gt 0)
+            {
+                $resourceLayer | Add-Member -MemberType NoteProperty -Name "Outputs" -Value (New-Object System.Object)
+                foreach($missingOutput in $missingResourceStack.Outputs.PsObject.Properties)
+                {
+                    $missingResourceStack.Outputs | Add-Member -MemberType NoteProperty -Name $missingOutput.Name -Value (Clone-Object -objectToClone $missingResourceStack.Outputs."$($missingOutput.Name)")
+                    $missingResourceStack.Outputs.PsObject.Properties.Remove("$($missingOutput.Name)")
+                }
+            }
+        }
+        $resourceLayerArray += $resourceLayer
+    }
+
+#########################################
+# Dependancy Fixer
+# Removes Objects Depenancies on a higher level [0 being the top, 1 being lower, etc], leaves depenancies if on the same level
+# If object has dependancies on a lower level, Error for now
+#########################################
+    Write-Log -message "Remove Dependancies on lower levels to higher levels"
+    foreach($dependantResource in $dependantResourceArray)
+    {
+        foreach($dependant in $dependantResource.DependsOn)
+        {
+            foreach($resourceLayer in $resourceLayerArray)
+            {
+                foreach($resource in $resourceLayer.Resources.PsObject.Properties)
+                {
+                    if($resource.Name -eq $dependant -and $dependantResource.ResourceLayer -eq $resourceLayer.Layer)
+                    {
+                        if(($resourceLayer.Resources."$($dependantResource.Resource)".PsObject.Properties | Where-Object {$_.Name -eq "DependsOn"}).Count -eq 0)
+                        {
+                            $resourceLayer.Resources."$($dependantResource.Resource)" | Add-Member -MemberType NoteProperty -Name "DependsOn" -Value @()
+                        }
+                        $resourceLayer.Resources."$($dependantResource.Resource)".DependsOn += $dependant
+                    }
+                    if($resource.Name -eq $dependant -and $dependantResource.ResourceLayer -lt $resourceLayer.Layer)
+                    {
+                        Write-ErrorLog -message "Resource: $($dependantResource.Resource), has dependancies on a lower layer: $($dependant), please review your stack management configuration"
+                    }
+                }
+            }   
+        }
+    }
+    #########################################
+    # Reference management
+    # Gathers Referenced objects into an array
+    #########################################
+    Write-Log -message "Manage Reference Objects on higher layers via outputs"
+    foreach($referencedObject in $referencedObjectsMap)
+    {
+        foreach($resourceLayer in $resourceLayerArray)
+        {
+            $propertiesList = Find-ObjectPropertiesRecursive -object $resourceLayer.Resources -matchToken "^$($referencedObject.Name)$" -pathName $rootObjectPathName
+            foreach($property in $propertiesList)
+            {
+                $transformedProperty = (($property -replace "^\$($rootObjectPathName)\.") -replace "\.$($referencedObject.Name)$")
+                $object = Get-PropertyObjectDymanic -object $resourceLayer.Resources -propertyPath $transformedProperty
+                $splitProperties = $transformedProperty.Split(".")
+                if($referencedObject.Type -eq "System.Array")
+                {
+                    if(!([string]::IsNullOrWhiteSpace($object."$($referencedObject.Name)"[$referencedObject.ResourceAt])))
+                    {
+                        $newRefObject = New-Object System.Object
+                        $newRefObject | Add-Member -MemberType NoteProperty -Name "Resource" -Value $splitProperties[0]
+                        $newRefObject | Add-Member -MemberType NoteProperty -Name "ResourceFullPath" -Value $transformedProperty
+                        $newRefObject | Add-Member -MemberType NoteProperty -Name "Reference" -Value $object."$($referencedObject.Name)"[$referencedObject.ResourceAt]
+                        $newRefObject | Add-Member -MemberType NoteProperty -Name "ReferenceType" -Value $($referencedObject.Name)
+                        $newRefObject | Add-Member -MemberType NoteProperty -Name "ResourceLayer" -Value $resourceLayer.Layer
+                        $newRefObject | Add-Member -MemberType NoteProperty -Name "ReferenceObject" -Value $referencedObject
+                        $newRefObject | Add-Member -MemberType NoteProperty -Name "ReferenceResource" -Value (Clone-Object -objectToClone $object)
+                        $referencedResourceArray += $newRefObject
+                    }
+                }
+                if($referencedObject.Type -eq "System.Object")
+                {
+                    if(!([string]::IsNullOrWhiteSpace($object."$($referencedObject.ResourceAt)")))
+                    {
+                        $newRefObject = New-Object System.Object
+                        $newRefObject | Add-Member -MemberType NoteProperty -Name "Resource" -Value $splitProperties[0]
+                        $newRefObject | Add-Member -MemberType NoteProperty -Name "ResourceFullPath" -Value $transformedProperty
+                        $newRefObject | Add-Member -MemberType NoteProperty -Name "Reference" -Value $object."$($referencedObject.ResourceAt)"
+                        $newRefObject | Add-Member -MemberType NoteProperty -Name "ReferenceType" -Value $($referencedObject.Name)
+                        $newRefObject | Add-Member -MemberType NoteProperty -Name "ResourceLayer" -Value $resourceLayer.Layer
+                        $newRefObject | Add-Member -MemberType NoteProperty -Name "ReferenceObject" -Value $referencedObject
+                        $newRefObject | Add-Member -MemberType NoteProperty -Name "ReferenceResource" -Value (Clone-Object -objectToClone $object)
+                        $referencedResourceArray += $newRefObject
+                    }
+                }
+            }
+        }
+    }
+
+
+    #########################################
+    # ReferencedObjects Mangement
+    #########################################
+    foreach($referencedResource in $referencedResourceArray)
+    {
+        foreach($resourceLayer in $resourceLayerArray)
+        {
+            foreach($resource in $resourceLayer.Resources.PsObject.Properties)
+            {
+                #########################################
+                # Output Object management
+                #########################################
+                if($resource.Name -eq $referencedResource.Reference -and $referencedResource.ResourceLayer -ge $resourceLayer.Layer)
+                {
+                    if(($resourceLayer.PsObject.Properties | Where-Object { $_.Name -eq "Outputs" }).Count -eq 0)
+                    {
+                        $resourceLayer | Add-Member -MemberType NoteProperty -Name "Outputs" -Value (New-Object System.Object)  
+                    }
+                    if(($resourceLayer.Outputs.PsObject.Properties | Where-Object { $_.Name -eq "$($stackSystemName)$($resourceLayer.LayerName)$($resourceLayer.Layer)$($referencedResource.Reference)$($referencedResource.Resource)" }).Count -eq 0)
+                    {
+                        $newOutputExportObject = New-Object System.Object
+                        $newOutputExportObject | Add-Member -MemberType NoteProperty -Name "Name" -Value "$($stackSystemName)$($resourceLayer.LayerName)$($resourceLayer.Layer)$($referencedResource.Reference)$($referencedResource.Resource)"
+                        $newOutputObject = New-Object System.Object
+                        $newOutputObject | Add-Member -MemberType NoteProperty -Name "Value" -Value $referencedResource.ReferenceResource
+                        $newOutputObject | Add-Member -MemberType NoteProperty -Name "Export" -Value $newOutputExportObject
+                        $resourceLayer.Outputs | Add-Member -MemberType NoteProperty -Name "$($stackSystemName)$($resourceLayer.LayerName)$($resourceLayer.Layer)$($referencedResource.Reference)$($referencedResource.Resource)" -Value $newOutputObject
+                    }
+                    $newSubObject = New-Object System.Object
+                    $newSubObject | Add-Member -MemberType NoteProperty -Name "Fn::Sub" -Value "$($stackSystemName)$($resourceLayer.LayerName)$($resourceLayer.Layer)$($referencedResource.Reference)$($referencedResource.Resource)"
+                    $newImportObject = New-Object System.Object
+                    $newImportObject  | Add-Member -MemberType NoteProperty -Name "Fn::ImportValue" -Value $newSubObject
+                    $referencedResource | Add-Member -MemberType NoteProperty -Name "ImportObject" -Value $newImportObject
+                    $referencedResource | Add-Member -MemberType NoteProperty -Name "FoundOnLayer" -Value $resourceLayer.Layer
+                }
+                if($resource.Name -eq $referencedResource.Reference -and $referencedResource.ResourceLayer -lt $resourceLayer.Layer)
+                {
+                    $referenceResourceError = @"
+The Resouce: $($referencedResource.Resource) contains References to a resource on a lower layer.
+The following resource is on a lower layer: $($referencedResource.Reference)
+Please review your stack management configuration.
+"@
+                    Write-ErrorLog -message $referenceResourceError
+                }
+                
+            }
+        }
+    }
+
+    foreach($referencedResource in $referencedResourceArray | Where-Object { $_.FoundOnLayer -ne $_.ResourceLayer })
+    {
+        $resourceLayer = $resourceLayerArray | Where-Object { $_.Layer -eq $referencedResource.ResourceLayer }
+        $splitProperties = $referencedResource.ResourceFullPath.Split(".")
+        $previousProperty = $splitProperties[-1]
+        $startingPropertyPath = $splitProperties[0..($splitProperties.Length - 2)] -join "."
+        $referencedObject = Get-PropertyObjectDymanic -object $resourceLayer.Resources -propertyPath $startingPropertyPath
+        if($previousProperty -match ".+?\[[0-9]\]$")
+        {
+            $propertySplit = $previousProperty.Split("[")
+            $previousProperty = $propertySplit[0]
+            $position = $propertySplit[-1].TrimEnd("]")
+            $referencedObject."$($previousProperty)"[$position] = $referencedResource.ImportObject
+        }
+        else
+        {
+            $referencedObject."$($previousProperty)" = $referencedResource.ImportObject
+        }
+    }
+
+    #########################################
+    # Output layers
+    #########################################
+    if(!([string]::IsNullOrWhiteSpace($stackOutputPath)))
+    {
+        $stackOutputPath = $stackOutputPath.TrimEnd("\")
+        $stackOutputPath = "$($stackOutputPath)\"
+        Write-Log -message "Output Layers"
+        foreach($layer in $resourceLayerArray)
+        {
+            if($layer.Resources.Count -gt 0)
+            {
+                $cloudFormationStack = New-Object System.Object
+                $cloudFormationStack | Add-Member -MemberType NoteProperty -Name "Resources" -Value $layer.Resources
+                if($null -ne $layer.Outputs)
+                {
+                    $cloudFormationStack | Add-Member -MemberType NoteProperty -Name "Outputs" -Value $layer.Outputs
+                }
+                $cloudformationString = ConvertTo-Json $cloudFormationStack -Depth 100
+
+                [IO.File]::WriteAllLines("$($stackOutputPath)$($stackSystemName)_$($layer.LayerName)_$($layer.Layer.ToString()).json", $cloudformationString)
+            }
+        }
+    }
+
+    return $resourceLayerArray
+}
+
+
+function Brand-ResourceStack
+{
+    param (
+        [string[]] $resourceStackFileLocations,
+        [string] $stackSystemName,
+        [string] $stackOutputPath,
+        [string] $stackManagementLocation = "$($PSScriptRoot)\..\Templates\StackManagement.json"
+    )
+
+    $resourceStackObjects = @()
+    foreach($resourceStackFileLocation in $resourceStackFileLocations)
+    {
+        $resourceStackFile = Get-Item $resourceStackFileLocation
+        $resourceStackText = [System.IO.File]::ReadAllText($resourceStackFile)
+        $resourceStackObject = ConvertFrom-Json $resourceStackText
+        $resourceStackObject | Add-Member -MemberType NoteProperty -Name "OriginFile" -Value $resourceStackFileLocation
+        $resourceStackObjects += $resourceStackObject
+    }
+
+    $resoruceConditions = @()
+    $resourceParameters = @()
+    $resourceOutputs = @()
+
+    foreach($resourceStackObject in $resourceStackObjects)
+    {
+        if($null -ne $resourceStackObject.Conditions)
+        {
+            foreach($condition in $resourceStackObject.Conditions.PsObject.Properties)
+            {
+                $conditional = New-Object System.Object
+                $conditional | Add-Member -MemberType NoteProperty -Name $condition.Name -Value (Clone-Object -object $resourceStackObject.Conditions."$($condition.Name)")
+                $conditional | Add-Member -MemberType NoteProperty -Name "OriginFile" -Value $resourceStackObject.OriginFile
+                $resoruceConditions += $conditional
+                $resourceStackObject.PsObject.Properties.Remove("Conditions")
+            }
+        }
+        if($null -ne $resourceStackObject.Parameters)
+        {
+            foreach($parameter in $resourceStackObject.Parameters.PsObject.Properties)
+            {
+                $parameterization = New-Object System.Object
+                $parameterization | Add-Member -MemberType NoteProperty -Name $parameter.Name -Value (Clone-Object -object $resourceStackObject.Parameters."$($parameter.Name)")
+                $parameterization | Add-Member -MemberType NoteProperty -Name "OriginFile" -Value $resourceStackObject.OriginFile
+                $resourceParameters += $parameterization
+                $resourceStackObject.PsObject.Properties.Remove("Parameters")
+            }
+        }
+        if($null -ne $resourceStackObject.Outputs)
+        {
+            foreach($output in $resourceStackObject.Outputs.PsObject.Properties)
+            {
+                $outputable = New-Object System.Object
+                $outputable | Add-Member -MemberType NoteProperty -Name $output.Name -Value (Clone-Object -object $resourceStackObject.Outputs."$($output.Name)")
+                $outputable | Add-Member -MemberType NoteProperty -Name "OriginFile" -Value $resourceStackObject.OriginFile
+                $resourceOutputs += $outputable
+                $resourceStackObject.PsObject.Properties.Remove("Outputs")
+            }
+        }
+    }
+    $orderedResources = Wrangle-ResourceStack -resourceStacks $resourceStackObjects -stackSystemName $stackSystemName -stackManagementLocation $stackManagementLocation
+    $referencedResourceOutputArray = Wrangle-OutputStack -outputs $resourceOutputs -stackManagementLocation $stackManagementLocation
+    
+    foreach($referencedResourceOutput in $referencedResourceOutputArray)
+    {
+        foreach($resourceLayer in $resourceLayerArray)
+        {
+            foreach($resource in $resourceLayer.Resources.PsObject.Properties)
+            {
+                if($resource.Name -eq $referencedResourceOutput.Reference)
+                {
+                    if(($resourceLayer.PsObject.Properties | Where-Object { $_.Name -eq "Outputs" }).Count -eq 0)
+                    {
+                        $resourceLayer | Add-Member -MemberType NoteProperty -Name "Outputs" -Value (New-Object System.Object)
+                    }
+                    $resourceLayer.Outputs | Add-Member -MemberType NoteProperty -Name $referencedResourceOutput.Output -Value $referencedResourceOutput.OutputObject
+                }
+            }
+        }       
+    }
+
+    foreach($condition in $resourceConditions)
+    {
+        foreach($resourceLayer in $resourceLayerArray)
+        {
+            foreach($resource in $resourceLayer.Resources.PsObject.Properties)
+            {
+                if(($resourceLayer.Resources."$($resource.Name)".PsObject.Properties | Where-Object {$_.Name -eq "Conditions"}).Count -eq 1)
+                {
+                    if(($resourceLayer.PsObject.Properties | Where-Object { $_.Name -eq "Conditions" }).Count -eq 0)
+                    {
+                        $resourceLayer | Add-Member -MemberType NoteProperty -Name "Conditions" -Value (New-Object System.Object)
+                    }
+                }
+            }
+        }
+    }
+    $wrangledConditons = Wrangle-ConditionsStack -conditions $resourceConditions -resourceLayers $orderedResources
+    foreach($resourceCondition in $resourceConditionArray)
+    {
+        foreach($resourceLayer in $resourceLayerArray)
+        {
+            foreach($resource in $resourceLayer.Resources.PsObject.Properties)
+            {
+                if(($resourceLayer.Resources."$($resource.Name)".PsObject.Properties | Where-Object { $_.Name -eq "Condition" }).Count -eq 1)
+                {
+                    if($resourceLayer.Resources."$($resource.Name)".Condition -eq $resourceCondition.Condition)
+                    {
+                        if(($resourceLayer.PsObject.Properties | Where-Object {$_.Name -eq "Conditions"}).Count -eq 0)
+                        {
+                            $resourceLayer | Add-Member -MemberType NoteProperty -Name "Conditions" -Value (New-Object System.Object)
+                        }
+                        if(($resourceLayer.Conditions.PsObject.Properties | Where-Object { $_.Name -eq $resourceCondition.Condition }).Count -eq 0)
+                        {
+                            $resourceLayer.Conditions | Add-Member -MemberType NoteProperty -Name $resourceCondition.Condition -Value $resourceCondition.ConditionObject."$($resourceCondition.Condition)"
+                        }
+                    }
+                }
+                $propertiesList = Find-ObjectPropertiesRecursive -object $resourceLayer.Resources."$($resource.Name)" -matchToken "^Fn::If$" -pathName $rootObjectPathName
+                foreach($property in $propertiesList)
+                {
+                    $transformedProperty = $property.Replace("$($rootObjectPathName).", "").Replace(".Fn::If","")
+                    $object = Get-PropertyObjectDymanic -object $resourceLayer.Resources."$($resource.Name)" -propertyPath $transformedProperty
+                    if($object."Fn::If"[0] -eq $resourceCondition.Condition)
+                    {
+                        if(($resourceLayer.PsObject.Properties | Where-Object {$_.Name -eq "Conditions"}).Count -eq 0)
+                        {
+                            $resourceLayer | Add-Member -MemberType NoteProperty -Name "Conditions" -Value (New-Object System.Object)
+                        }
+                        if(($resourceLayer.Conditions.PsObject.Properties | Where-Object { $_.Name -eq $resourceCondition.Condition }).Count -eq 0)
+                        {
+                            $resourceLayer.Conditions | Add-Member -MemberType NoteProperty -Name $resourceCondition.Condition -Value $resourceCondition.ConditionObject."$($resourceCondition.Condition)"
+                        }
+                    }
+                }
+            }
+        }
+    }
+    foreach($resourceCondition in $resourceConditionArray)
+    {
+        foreach($resourceLayer in $resourceLayerArray)
+        {
+            foreach($condition in $resourceLayer.Conditions.PsObject.Properties)
+            {
+                $propertiesList = Find-ObjectPropertiesRecursive -object $resourceLayer.Conditions."$($condition.Name)" -matchToken "^Condition$" -pathName $rootObjectPathName
+                foreach($property in $propertiesList)
+                {
+                    $transformedProperty = $property.Replace("$($rootObjectPathName).", "").Replace(".Condition","")
+                    $object = Get-PropertyObjectDymanic -object $resourceLayer.Conditions."$($condition.Name)" -propertyPath $transformedProperty
+                    if($object.Condition -eq $resourceCondition.Condition)
+                    {
+                        if(($resourceLayer.Conditions.PsObject.Properties | Where-Object { $_.Name -eq $resourceCondition.Condition }).Count -eq 0)
+                        {
+                            $resourceLayer.Conditions | Add-Member -MemberType NoteProperty -Name $resourceCondition.Condition -Value $resourceCondition.ConditionObject."$($resourceCondition.Condition)"
+                        }
+                    }
+                }
+            }
+        }
+    }
+    $wrangledParameters = Wrangle-ParameterStack -parameters $resourceParameters -resourceLayers $orderedResources
+    ##################
+    # Add parameters to stack here
+    ##################
+}
+
+function Wrangle-ParameterStack
+{
+    param (
+        [System.Object[]] $parameters,
+        [System.Object[]] $resourceLayers,
+        [string] $stackManagementLocation = "$($PSScriptRoot)\..\Templates\StackManagement.json"
+    )
+}
+
+function Wrangle-OutputStack
+{
+    param (
+        [System.Object[]] $outputs,
+        [string] $stackManagementLocation = "$($PSScriptRoot)\..\Templates\StackManagement.json"
+    )
+
+    $stackMangementFile = Get-Item $stackManagementLocation
+    $stackMangementText = [System.IO.File]::ReadAllText($stackMangementFile)
+    $stackMangementObject = ConvertFrom-Json $stackMangementText
+
+    $rootObjectPathName = "`$root_Object"
+    $referencedResourceOutputArray = @()
+
+    $referencedObjectsMap = $stackMangementObject.ReferenceObjectMap
+
+    foreach($referencedObject in $referencedObjectsMap)
+    {
+        foreach($output in $outputs)
+        {
+            $propertiesList = Find-ObjectPropertiesRecursive -object $output -matchToken "^$($referencedObject.Name)$" -pathName $rootObjectPathName
+            foreach($property in $propertiesList)
+            {
+                $transformedProperty = $property.Replace("$($rootObjectPathName).", "").Replace(".$($referencedObject.Name)","")
+                $splitProperties = $transformedProperty.Split(".")
+                $object = $output
+                foreach($singleProperty in $splitProperties)
+                {
+                    $object = $object."$($singleProperty)"
+                }
+                if($referencedObject.Type -eq "System.Array")
+                {
+                    foreach($item in $object)
+                    {
+                        if(!([string]::IsNullOrWhiteSpace($item."$($referencedObject.Name)"[$referencedObject.ResourceAt])))
+                        {
+                            $newRefObject = New-Object System.Object
+                            $newRefObject | Add-Member -MemberType NoteProperty -Name "Output" -Value $splitProperties[0]
+                            $newRefObject | Add-Member -MemberType NoteProperty -Name "OutputFullPath" -Value $transformedProperty
+                            $newRefObject | Add-Member -MemberType NoteProperty -Name "OutputObject" -Value $output.$splitProperties[0]
+                            $newRefObject | Add-Member -MemberType NoteProperty -Name "Reference" -Value $item."$($referencedObject.Name)"[$referencedObject.ResourceAt]
+                            $newRefObject | Add-Member -MemberType NoteProperty -Name "ReferenceType" -Value $($referencedObject.Name)
+                            $newRefObject | Add-Member -MemberType NoteProperty -Name "ReferenceObject" -Value $referencedObject
+                            $newRefObject | Add-Member -MemberType NoteProperty -Name "ReferenceResource" -Value (Clone-Object -objectToClone $item)
+                            $newRefObject | Add-Member -MemberType NoteProperty -Name "OriginFile" -Value $output.OriginFile
+                            $referencedResourceOutputArray += $newRefObject
+                        }
+
+                    }
+                }
+                if($referencedObject.Type -eq "System.Object")
+                {
+                    if($object.Count -eq 1)
+                    {
+                        $object = @($object)
+                    }
+                    foreach($item in $object)
+                    {
+                        if(!([string]::IsNullOrWhiteSpace($item."$($referencedObject.ResourceAt)")))
+                        {
+                            $newRefObject = New-Object System.Object
+                            $newRefObject | Add-Member -MemberType NoteProperty -Name "Output" -Value $splitProperties[0]
+                            $newRefObject | Add-Member -MemberType NoteProperty -Name "OutputFullPath" -Value $transformedProperty
+                            $newRefObject | Add-Member -MemberType NoteProperty -Name "OutputObject" -Value $output.$splitProperties[0]
+                            $newRefObject | Add-Member -MemberType NoteProperty -Name "Reference" -Value $item."$($referencedObject.ResourceAt)"
+                            $newRefObject | Add-Member -MemberType NoteProperty -Name "ReferenceType" -Value $($referencedObject.Name)
+                            $newRefObject | Add-Member -MemberType NoteProperty -Name "ReferenceObject" -Value $referencedObject
+                            $newRefObject | Add-Member -MemberType NoteProperty -Name "ReferenceResource" -Value (Clone-Object -objectToClone $item)
+                            $newRefObject | Add-Member -MemberType NoteProperty -Name "OriginFile" -Value $output.OriginFile
+                            $referencedResourceOutputArray += $newRefObject
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return $referencedResourceOutputArray
+}
+
+function Wrangle-ConditionalStack
+{
+    param (
+        [System.Object[]] $conditions,
+        [string] $stackManagementLocation = "$($PSScriptRoot)\..\Templates\StackManagement.json"
+    )
+
+    $resourceConditionArray = @()
+
+    foreach($condition in $conditions)
+    {
+        $conditionName = ($condition.PsObject.Properties | Where-Object { $_.Name -ne "OriginFile" }).Name
+        $newRefObject = New-Object System.Object
+        $newRefObject | Add-Member -MemberType NoteProperty -Name "Condition" -Value $conditionName
+        $newRefObject | Add-Member -MemberType NoteProperty -Name "ConditionObject" -Value $condition.$conditionName
+        $newRefObject | Add-Member -MemberType NoteProperty -Name "OriginFile" -Value $condition.OriginFile
+        $resourceConditionArray += $newRefObject
+    }
+    return $resourceConditionArray
+}

@@ -1,0 +1,28 @@
+{
+    "Resources": {
+        "#{IamAccessKey}": {
+            "Type": "AWS::IAM::AccessKey",
+            "Properties": {
+                "UserName": {
+                    "Ref": "#{IamUser}"
+                }
+            },
+            "DependsOn": [
+                "#{IamUser}"
+            ]
+        }
+    },
+    "Outputs": {
+        "IamSecretKey#{IamAccessKey}": {
+            "Value": {
+                "Fn::GetAtt": [
+                    "#{IamAccessKey}",
+                    "SecretAccessKey"
+                ]
+            }
+        }
+    },
+    "ReferenceData": {
+        "IamSecretManager": "\\IamSecretManagerTemplate.json"
+    }
+}

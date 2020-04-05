@@ -1,0 +1,18 @@
+{
+    "Resources": {
+        "#{IamInstanceProfile}": {
+            "Type": "AWS::IAM::InstanceProfile",
+            "Properties": {
+                "Roles": [
+                    {
+                    "Ref": "#{IamRole}"
+                    }
+                ],
+                "Path": "/"
+            },
+            "DependsOn": [
+                "#{IamRole}"
+            ]
+        }
+    }
+}

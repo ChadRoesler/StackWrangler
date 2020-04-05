@@ -1,0 +1,26 @@
+{
+    "Resources": {
+        "#{IamRole}": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "RoleName": "#{IamRoleName}",
+                "Path": "/",
+                "AssumeRolePolicyDocument" : {
+                    "Version" : "2012-10-17",
+                    "Statement" : [
+                        {
+                            "Effect" : "Allow",
+                            "Principal" : {
+                                "Service" : "#{ServiceName}.amazonaws.com"
+                            },
+                            "Action" : "sts:AssumeRole"
+                        }
+                    ]
+                }
+            }
+        }
+    },
+    "ReferenceData": {
+        "InstanceProfile": "\\IamInstanceProfileTemplate.json"
+    }
+}

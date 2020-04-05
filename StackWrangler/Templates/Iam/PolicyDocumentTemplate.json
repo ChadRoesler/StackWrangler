@@ -1,0 +1,11 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "#{StatementGuid}",
+      "Action": [#{Actions}],
+      "Effect": "Allow",
+      "Resource": [#{Resources}]
+    }
+  ]
+}

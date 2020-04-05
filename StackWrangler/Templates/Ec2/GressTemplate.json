@@ -1,0 +1,6 @@
+{
+    "IpProtocol" : "#{protocol}",
+    "FromPort" : #{fromPort},
+    "ToPort" : #{toPort},
+    "CidrIp" : "#{cidrIp}"
+}

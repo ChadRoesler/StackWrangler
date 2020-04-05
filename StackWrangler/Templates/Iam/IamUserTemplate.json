@@ -1,0 +1,14 @@
+{
+    "Resources": {
+        "#{IamUser}": {
+            "Type": "AWS::IAM::User",
+            "Properties": {
+                "UserName": "#{IamUserName}",
+                "Path": "/"
+            }
+        }
+    },
+    "ReferenceData": {
+        "IamAccessKey": "\\IamAccessKeyTemplate.json"
+    }
+}

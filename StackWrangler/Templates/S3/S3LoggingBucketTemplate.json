@@ -1,0 +1,26 @@
+{
+    "Resources": {
+        "#{S3LogBucket}": {
+            "Type": "AWS::S3::Bucket",
+            "Properties": {
+                "BucketName": "#{S3LogBucketName}",
+                "VersioningConfiguration": {
+                    "Status": "Enabled"
+                },
+                "BucketEncryption": {
+                    "ServerSideEncryptionConfiguration": [
+                        {
+                            "ServerSideEncryptionByDefault": {
+                                "SSEAlgorithm": "AES256"
+                            }
+                        }
+                    ]
+                },
+                "AccessControl": "LogDeliveryWrite",
+                "LoggingConfiguration": {
+                    "LogFilePrefix":  #{S3LogBucketLogFilePrefix}
+                }
+            }
+        }
+    }
+}
